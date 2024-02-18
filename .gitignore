@@ -1,0 +1,6 @@
+touch2
+touch2.exe
+a.out
+*.o
+*.out
+.depend
