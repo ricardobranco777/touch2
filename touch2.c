@@ -1,25 +1,10 @@
 /*
- * touch2 v2.0
- *	Change last-inode-change times on files
- *
- * (c) 2002, 2005, 2006, 2017 by Ricardo Branco
- *
- * MIT License
- *
- * OVERVIEW:
- *   You use touch(1) to change the last-access & last-modification times of the files (or directories) you read or modify. The problem is that doing this will change the last-inode-change time to the current time. Now you may use touch2 right after using touch(1) to erase all evidence.
- *   It must be run as root or with CAP_SYS_TIME capabilities.
- *
+ * Change last-inode-change times on files
+*
  * DETAILS:
- *   First, we set the system time to the desired ctime, then we call chmod(2) to force an update of the inode's ctime. Later, we restore the system time as if nothing happened.
- *
- * BUGS / LIMITATIONS:
- *  + *BSD systems restrict settimeofday(2) when running in secure mode.
- *  + Nanosecond resolution (where supported) it's impossible to get right.
+ *   First we set the system time to the desired ctime, then we call chmod(2)
+ *   to force an update of the inode's ctime. Later, we restore the system time
  */
-
-#define _FILE_OFFSET_BITS 64
-#define __USE_XOPEN2K8
 
 static char usage[] =
 	"Usage: ./touch2 [-a|-m] [-r file|-t timestamp] files...\n"
@@ -46,36 +31,7 @@ static char usage[] =
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
-
-#ifndef timerisset
-#define timerisset(tvp)		((tvp)->tv_sec || (tvp)->tv_usec)
-#endif
-
-#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-#ifndef _POSIX_SOURCE
-#define ST_ATIME_NSEC	  st_atimespec.tv_nsec
-#define ST_MTIME_NSEC	  st_mtimespec.tv_nsec
-#define ST_CTIME_NSEC	  st_ctimespec.tv_nsec
-#else
-#define ST_ATIME_NSEC	  st_atimensec
-#define ST_MTIME_NSEC	  st_mtimensec
-#define ST_CTIME_NSEC	  st_ctimensec
-#endif
-#elif defined(__linux__) && defined(_STATBUF_ST_NSEC)
-#define ST_ATIME_NSEC	  st_atim.tv_nsec
-#define ST_MTIME_NSEC	  st_mtim.tv_nsec
-#define ST_CTIME_NSEC	  st_ctim.tv_nsec
-#elif defined(sun) && (defined(__SVR4) || defined(__svr4__))
-#if defined(_XOPEN_SOURCE) || defined(_POSIX_C_SOURCE)
-#define ST_ATIME_NSEC	  st_atim.__tv_nsec
-#define ST_MTIME_NSEC	  st_mtim.__tv_nsec
-#define ST_CTIME_NSEC	  st_ctim.__tv_nsec
-#else
-#define ST_ATIME_NSEC	  st_atim.tv_nsec
-#define ST_MTIME_NSEC	  st_mtim.tv_nsec
-#define ST_CTIME_NSEC	  st_ctim.tv_nsec
-#endif
-#endif
+#include <err.h>
 
 /* Use the file's atime instead of ctime as reference */
 static int use_atime = 0;
@@ -85,59 +41,52 @@ static int use_mtime = 0;
 /*
  * Returns 0 on success, -1 on (system call) error
  */
-static int change_ctime(const char *file, struct timeval ctime)
+static int
+change_ctime(const char *file, struct timeval ctime)
 {
-#ifdef SIG_SETMASK
 	sigset_t newsigmask, oldsigmask;
-#endif
 	struct timeval now;
 	struct stat inode;
 	int status = 0;
 
 	if (file == NULL)
-	return -1;
+		return (-1);
 
 	/* Get file's inode information */
 	while (stat(file, &inode) < 0) {
 		if (errno != EINTR) {
 			perror("stat()");
-			return -1;
+			return (-1);
 		}
 	}
 
 	if (!timerisset(&ctime)) {
 		if (use_atime) {		/* Use the file's own atime */
 			ctime.tv_sec = inode.st_atime;
-#ifdef ST_ATIME_NSEC
-			ctime.tv_usec = inode.ST_ATIME_NSEC / 1000;
-#endif
+			ctime.tv_usec = inode.st_atim.tv_nsec / 1000;
 		}
 		else
 		if (use_mtime) {		/* Use the file's own mtime */
 			ctime.tv_sec = inode.st_mtime;
-#ifdef ST_MTIME_NSEC
-			ctime.tv_usec = inode.ST_MTIME_NSEC / 1000;
-#endif
+			ctime.tv_usec = inode.st_mtim.tv_nsec / 1000;
 		}
 	}
 
 	/* Save current time */
 	if (gettimeofday(&now, NULL) < 0) {
 		perror("gettimeofday()");
-		return -1;
+		return (-1);
 	}
 
-#ifdef SIG_SETMASK
 	/* Block ALL signals */
 	if (sigfillset(&newsigmask) < 0) {
 		perror("sigfillset()");
-		return -1;
+		return (-1);
 	}
 	if (sigprocmask(SIG_SETMASK, &newsigmask, &oldsigmask) < 0) {
 		perror("sigprocmask()");
-		return -1;
+		return (-1);
 	}
-#endif
 
 /* ----- BEGIN CRITICAL SECTION ----- */
 
@@ -171,31 +120,33 @@ static int change_ctime(const char *file, struct timeval ctime)
 
 end:
 
-#ifdef SIG_SETMASK
 	/* Unblock signals */
 	if (sigprocmask(SIG_SETMASK, &oldsigmask, NULL) < 0) {
 		perror("sigprocmask()");
-		return -1;
+		return (-1);
 	}
-#endif
 
 	return ((status != 0) ? -1 : 0);
 }
 
-static int nstrchr(const char *s, char c)
+static int
+nstrchr(const char *s, char c)
 {
 	int n = 0;
 
-	if (!s) return 0;
+	if (s == NULL)
+		return 0;
 
-	while (*s)
-		if (*s++ == c) n++;
+	while (*s != '\0')
+		if (*s++ == c)
+			n++;
 
 	return n;
 }
 
 /* converts from "[[[YYYY:]MM:]DD:]hh:mm:ss[.uuuuuu]" to struct timeval */
-static void str2timeval(const char *s, struct timeval *tvp)
+static void
+str2timeval(const char *s, struct timeval *tvp)
 {
 #define DELIM ':'
 #define DOT '.'
@@ -249,21 +200,18 @@ static void str2timeval(const char *s, struct timeval *tvp)
 	return;
 }
 
-static void exit_usage(int status)
+static
+void exit_usage(int status)
 {
-	FILE *fp;
-
-	if (status)
-		fp = stderr;
-	else
-		fp = stdout;
+	FILE *fp = status ? stderr : stdout;
 
 	fprintf(fp, "%s\n", usage);
 
 	exit(status);
 }
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
 	struct timeval new_ctime = { 0, 0 };
 	char *rfile = NULL; /* Reference file */
@@ -334,21 +282,15 @@ int main(int argc, char *argv[])
 
 		if (use_atime) {
 			new_ctime.tv_sec = inode.st_atime;
-#ifdef ST_ATIME_NSEC
-			new_ctime.tv_usec = inode.ST_ATIME_NSEC / 1000;
-#endif
+			new_ctime.tv_usec = inode.st_atim.tv_nsec / 1000;
 		}
 		else if (use_mtime) {
 			new_ctime.tv_sec = inode.st_mtime;
-#ifdef ST_MTIME_NSEC
-			new_ctime.tv_usec = inode.ST_MTIME_NSEC / 1000;
-#endif
+			new_ctime.tv_usec = inode.st_mtim.tv_nsec / 1000;
 		}
 		else {
 			new_ctime.tv_sec = inode.st_ctime;
-#ifdef ST_CTIME_NSEC
-			new_ctime.tv_usec = inode.ST_CTIME_NSEC / 1000;
-#endif
+			new_ctime.tv_usec = inode.st_ctim.tv_nsec / 1000;
 		}
 
 	}
@@ -360,6 +302,5 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	exit(0);
+	return (0);
 }
-
