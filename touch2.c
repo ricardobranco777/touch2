@@ -310,6 +310,7 @@ int main(int argc, char *argv[])
 				break;
 			case 'h':   /* help */
 				exit_usage(0);
+				break;
 			default:
 				exit_usage(1);
 			}
