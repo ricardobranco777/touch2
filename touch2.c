@@ -31,7 +31,6 @@ static char usage[] =
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
-#include <err.h>
 
 /* Use the file's atime instead of ctime as reference */
 static int use_atime = 0;
