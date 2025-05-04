@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: MIT */
+
 /*
  * Change last-inode-change times on files
 *
@@ -10,6 +12,7 @@
 Options:\n\
 	-a	Use the file's last-access time\n\
 	-m	Use the file's last-modification time\n\
+	-n	Dry run. Do not change anything\n\
 	-r file	Use this file's time instead of current time\n\
 	-t [[[YYYY:]MM:]DD:]hh:mm:ss[.uuuuuu]\n\
 		Use this timestamp instead of current time"
@@ -37,9 +40,11 @@ extern char *__progname;
 #endif
 
 /* Use the file's atime instead of ctime as reference */
-static int use_atime = 0;
+static int use_atime;
 /* Use the file's mtime... */
-static int use_mtime = 0;
+static int use_mtime;
+
+static int dry_run;
 
 static void
 change_ctime(const char *file, struct timeval ctime)
@@ -61,6 +66,16 @@ change_ctime(const char *file, struct timeval ctime)
 			ctime.tv_sec = inode.st_mtime;
 			ctime.tv_usec = inode.st_mtim.tv_nsec / 1000;
 		}
+	}
+
+	if (dry_run) {
+		char buf[64];
+		time_t secs = ctime.tv_sec;
+		struct tm *tm = localtime(&secs);
+		strftime(buf, sizeof(buf), "%F %T", tm);
+		printf("Would change ctime of %s to %s.%06ld\n",
+			file, buf, (long)ctime.tv_usec);
+		return;
 	}
 
 	/* Save current time */
@@ -177,7 +192,7 @@ main(int argc, char *argv[])
 	struct stat inode;
 	int i, ch;
 
-	while ((ch = getopt(argc, argv, "amr:t:")) != -1) {
+	while ((ch = getopt(argc, argv, "amnr:t:")) != -1) {
 		switch (ch) {
 		case 'a':
 			if (use_mtime || timerisset(&new_ctime))
@@ -188,6 +203,9 @@ main(int argc, char *argv[])
 			if (use_atime || timerisset(&new_ctime))
 				errx(1, "%s", ERROR_MUTUALLY_EXCLUSIVE1);
 			use_mtime = 1;
+			break;
+		case 'n':
+			dry_run = 1;
 			break;
 		case 'r':
 			if (timerisset(&new_ctime))
