@@ -14,14 +14,18 @@ Options:\n\
 	-m	Use the file's last-modification time\n\
 	-n	Dry run. Do not change anything\n\
 	-r file	Use this file's time instead of current time\n\
-	-t [[[YYYY:]MM:]DD:]hh:mm:ss[.uuuuuu]\n\
-		Use this timestamp instead of current time"
+	-t TS	Use this timestamp instead of current time\n\
+	-T FMT	strftime(3) format to parse -t option"
 
 #define ERROR_MUTUALLY_EXCLUSIVE1 \
 	"The -a, -m & -t options are mutually exclusive"
 
 #define ERROR_MUTUALLY_EXCLUSIVE2 \
 	"The -r & -t options are mutually exclusive"
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,22 +63,17 @@ change_ctime(const char *file, struct timeval ctime)
 			err(1, "%s", file);
 
 	if (!timerisset(&ctime)) {
-		if (use_atime) {		/* Use the file's own atime */
+		if (use_atime)
 			ctime.tv_sec = inode.st_atime;
-			ctime.tv_usec = inode.st_atim.tv_nsec / 1000;
-		} else if (use_mtime) {		/* Use the file's own mtime */
+		else if (use_mtime)
 			ctime.tv_sec = inode.st_mtime;
-			ctime.tv_usec = inode.st_mtim.tv_nsec / 1000;
-		}
 	}
 
 	if (dry_run) {
 		char buf[64];
-		time_t secs = ctime.tv_sec;
-		struct tm *tm = localtime(&secs);
+		struct tm *tm = localtime(&ctime.tv_sec);
 		strftime(buf, sizeof(buf), "%F %T", tm);
-		printf("Would change ctime of %s to %s.%06ld\n",
-			file, buf, (long)ctime.tv_usec);
+		printf("Would change ctime of %s to %s\n", file, buf);
 		return;
 	}
 
@@ -113,86 +112,36 @@ change_ctime(const char *file, struct timeval ctime)
 		err(1, "sigprocmask");
 }
 
-static int
-nstrchr(const char *s, char c)
-{
-	int n = 0;
-
-	if (s == NULL)
-		return 0;
-
-	while (*s != '\0')
-		if (*s++ == c)
-			n++;
-
-	return n;
-}
-
-/* converts from "[[[YYYY:]MM:]DD:]hh:mm:ss[.uuuuuu]" to struct timeval */
 static void
-str2timeval(const char *s, struct timeval *tvp)
+str2timeval(const char *str, const char *fmt, struct timeval *tvp)
 {
-#define DELIM ':'
-#define DOT '.'
 	struct tm *tp;
 	struct tm tm;
 	time_t now;
-	int n;
-
-	if (s == NULL || tvp == NULL)
-		return;
 
 	now = time(NULL);
 	tp = localtime(&now);
+	tm = *tp;
 
-	memset(&tm, 0, sizeof(tm));
-	/* Default is current date & time */
-	memcpy(&tm, tp, sizeof(tm));
+	if (strptime(str, fmt, &tm) == NULL)
+		errx(1, "invalid time format: %s", str);
 
-	tvp->tv_sec = tvp->tv_usec = 0;
-
-	n = nstrchr(s, DELIM);
-
-	if (n > 4) {
-		tm.tm_year = atoi(s) - 1900;
-		s = strchr(s, DELIM) + 1;
-	}
-	if (n > 3) {
-		tm.tm_mon = atoi(s) - 1;
-		s = strchr(s, DELIM) + 1;
-	}
-	if (n > 2) {
-		tm.tm_mday = atoi(s);
-		s = strchr(s, DELIM) + 1;
-	}
-	if (n > 1) {
-		tm.tm_hour = atoi(s);
-		s = strchr(s, DELIM) + 1;
-	}
-	if (n > 0) {
-		tm.tm_min = atoi(s);
-		s = strchr(s, DELIM) + 1;
-	}
-	tm.tm_sec = atoi(s);
-
-	tvp->tv_sec = mktime(&tm);
-
-	if ((s = strchr(s, DOT)) != NULL)
-		if (*++s != '\0')
-		tvp->tv_usec = atol(s);
-
-	return;
+	if ((tvp->tv_sec = mktime(&tm)) == -1)
+		err(1, "mktime");
+	tvp->tv_usec = 0;
 }
 
 int
 main(int argc, char *argv[])
 {
 	struct timeval new_ctime = { 0, 0 };
-	char *rfile = NULL; /* Reference file */
+	const char *timefmt= "%Y-%m-%d %H:%M:%S";
+	char *timestamp = NULL;
+	char *rfile = NULL;
 	struct stat inode;
 	int i, ch;
 
-	while ((ch = getopt(argc, argv, "amnr:t:")) != -1) {
+	while ((ch = getopt(argc, argv, "amnr:t:T:")) != -1) {
 		switch (ch) {
 		case 'a':
 			if (use_mtime || timerisset(&new_ctime))
@@ -217,7 +166,10 @@ main(int argc, char *argv[])
 				errx(1, "%s", ERROR_MUTUALLY_EXCLUSIVE1);
 			if (rfile != NULL)
 				errx(1, USAGE, getprogname());
-			str2timeval(optarg, &new_ctime);
+			timestamp = optarg;
+			break;
+		case 'T':
+			timefmt= optarg;
 			break;
 		default:
 			errx(1, USAGE, getprogname());
@@ -227,21 +179,18 @@ main(int argc, char *argv[])
 	if (optind >= argc)
 		errx(1, USAGE, getprogname());
 
-	if (rfile != NULL) {
+	if (timestamp != NULL)
+		str2timeval(timestamp, timefmt, &new_ctime);
+	else if (rfile != NULL) {
 		while (stat(rfile, &inode) < 0)
 			if (errno != EINTR)
 				err(1, "%s", rfile);
-
-		if (use_atime) {
+		if (use_atime)
 			new_ctime.tv_sec = inode.st_atime;
-			new_ctime.tv_usec = inode.st_atim.tv_nsec / 1000;
-		} else if (use_mtime) {
+		else if (use_mtime)
 			new_ctime.tv_sec = inode.st_mtime;
-			new_ctime.tv_usec = inode.st_mtim.tv_nsec / 1000;
-		} else {
+		else
 			new_ctime.tv_sec = inode.st_ctime;
-			new_ctime.tv_usec = inode.st_ctim.tv_nsec / 1000;
-		}
 	}
 
 	for (i = optind; i < argc; i++)
